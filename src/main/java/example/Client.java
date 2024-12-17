@@ -84,10 +84,10 @@ public class Client {
                             logger.info("Target gold location not found!");
                         }
                         render(cave, itemLocations, playerLocations, player, targetGold);
-                        List<Direction> pathToGold = findPathToGold(cave, myLocation, targetGold, playerLocations);
+                        List<Direction> pathToGold = findPathToGold(cave, myLocation, targetGold, playerLocations, player);
 
                         if (pathToGold.isEmpty()) {
-                            logger.info("No path to the target gold!");
+                            logger.info("No path to target gold!");
                         } else {
                             for (Direction direction : pathToGold) {
                                 switch (direction) {
@@ -177,21 +177,21 @@ public class Client {
                 .orElse(null);
     }
 
-    private static List<Direction> findPathToGold(Cave cave, Location myLocation, Location targetGold, Collection<Response.StateLocations.PlayerLocation> playerLocations) {
+    private static List<Direction> findPathToGold(Cave cave, Location myLocation, Location targetGold, Collection<Response.StateLocations.PlayerLocation> playerLocations, Player player) {
 
-        Map<Location, Integer> neighbourDistances = new HashMap<>(); //g
-        Map<Location, Integer> totalDistances = new HashMap<>(); //f
+        Map<Location, Integer> myLocationToCurrentDistances = new HashMap<>(); //g
+        Map<Location, Integer> myLocationToTargetDistances = new HashMap<>(); //f
         Map<Location, Location> currentToPrevious = new HashMap<>();
 
         Set<Location> notVisited = new HashSet<>();
         Set<Location> visited = new HashSet<>();
 
-        neighbourDistances.put(myLocation, 0);
-        totalDistances.put(myLocation, distance(myLocation, targetGold));
+        myLocationToCurrentDistances.put(myLocation, 0);
+        myLocationToTargetDistances.put(myLocation, distance(myLocation, targetGold));
         notVisited.add(myLocation);
 
         while (!notVisited.isEmpty()) {
-            Location current = getClosestNeighbour(notVisited, totalDistances);
+            Location current = getClosestNeighbour(notVisited, myLocationToTargetDistances);
 
             if (current.equals(targetGold)) {
                 return reconstructPath(currentToPrevious, current);
@@ -203,16 +203,16 @@ public class Client {
             for (Direction direction : Direction.values()) {
                 Location neighbour = getNeighborLocation(current, direction);
 
-                if (!isSafe(cave, neighbour, playerLocations) || visited.contains(neighbour)) {
+                if (!isSafe(cave, neighbour, playerLocations, player) || visited.contains(neighbour)) {
                     continue;
                 }
 
-                int neighbourDistance = neighbourDistances.get(current) + 1;
+                int neighbourDistance = myLocationToCurrentDistances.get(current) + 1;
 
-                if (!notVisited.contains(neighbour) || neighbourDistance < neighbourDistances.getOrDefault(neighbour, Integer.MAX_VALUE)) {
+                if (!notVisited.contains(neighbour) || neighbourDistance < myLocationToCurrentDistances.getOrDefault(neighbour, Integer.MAX_VALUE)) {
                     notVisited.add(neighbour);
-                    neighbourDistances.put(neighbour, neighbourDistance);
-                    totalDistances.put(neighbour, neighbourDistance + distance(neighbour, targetGold));
+                    myLocationToCurrentDistances.put(neighbour, neighbourDistance);
+                    myLocationToTargetDistances.put(neighbour, neighbourDistance + distance(neighbour, targetGold));
                     currentToPrevious.put(neighbour, current);
                 }
             }
@@ -265,7 +265,7 @@ public class Client {
         };
     }
 
-    private static boolean isSafe(Cave cave, Location location, Collection<Response.StateLocations.PlayerLocation> playerLocations) {
+    private static boolean isSafe(Cave cave, Location location, Collection<Response.StateLocations.PlayerLocation> playerLocations, Player player) {
 
         boolean isRock = cave.rock(location.row(), location.column());
 
@@ -276,7 +276,14 @@ public class Client {
         boolean isDragon = dragonLocations.values().stream()
                 .anyMatch(dragonLocation -> dragonLocation.equals(location));
 
-        return !isRock && !isDragon;
+        Map<Player.HumanPlayer, Location> otherPlayersLocations = playerLocations.stream()
+                .filter(entry -> entry.entity() instanceof Player.HumanPlayer humanPlayer && !humanPlayer.equals(player))
+                .collect(Collectors.toMap(entry -> (Player.HumanPlayer) entry.entity(), Response.StateLocations.PlayerLocation::location));
+
+        boolean isOtherPlayer = otherPlayersLocations.values().stream()
+                .anyMatch(otherPlayerLocation -> otherPlayerLocation.equals(location));
+
+        return !isRock && !isDragon && !isOtherPlayer;
     }
 
     private static void movePlayerPipeline(BufferedWriter writer, Direction direction) throws IOException {
