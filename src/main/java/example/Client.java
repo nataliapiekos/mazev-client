@@ -1,6 +1,5 @@
 package example;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import example.domain.Request;
 import example.domain.Response;
@@ -43,7 +42,7 @@ public class Client {
                 logger.info("Sent command: {}", json);
             }
 
-            Cave cave=null;
+            Cave cave = null;
             Player player = null;
             Collection<Response.StateLocations.ItemLocation> itemLocations;
             Collection<Response.StateLocations.PlayerLocation> playerLocations;
@@ -85,7 +84,7 @@ public class Client {
                             logger.info("Target gold location not found!");
                         }
                         render(cave, itemLocations, playerLocations, player, targetGold);
-                        List<Direction> pathToGold = findPathToGold(cave, myLocation, targetGold);
+                        List<Direction> pathToGold = findPathToGold(cave, myLocation, targetGold, playerLocations);
 
                         if (pathToGold.isEmpty()) {
                             logger.info("No path to the target gold!");
@@ -124,7 +123,7 @@ public class Client {
                 }
             }
         }
-        
+
         for (final var entry : itemLocations) {
             final var location = entry.location();
             tbl[location.row() * caveCols + location.column()] = switch (entry.entity()) {
@@ -132,7 +131,7 @@ public class Client {
                 case Item.Health ignored -> 'H';
             };
         }
-        
+
         for (final var entry : playerLocations) {
             final var location = entry.location();
             tbl[location.row() * caveCols + location.column()] = switch (entry.entity()) {
@@ -140,8 +139,7 @@ public class Client {
                 case Player.HumanPlayer humanPlayer -> {
                     if (humanPlayer.equals(player)) {
                         yield 'M';
-                    }
-                    else {
+                    } else {
                         yield 'P';
                     }
                 }
@@ -179,11 +177,106 @@ public class Client {
                 .orElse(null);
     }
 
-    private static List<Direction> findPathToGold(Cave cave, Location myLocation, Location targetGold){
+    private static List<Direction> findPathToGold(Cave cave, Location myLocation, Location targetGold, Collection<Response.StateLocations.PlayerLocation> playerLocations) {
 
-        List<Direction> pathToGold = new ArrayList<>();
-        // TODO
-        return pathToGold;
+        Map<Location, Integer> neighbourDistances = new HashMap<>(); //g
+        Map<Location, Integer> totalDistances = new HashMap<>(); //f
+        Map<Location, Location> currentToPrevious = new HashMap<>();
+
+        Set<Location> notVisited = new HashSet<>();
+        Set<Location> visited = new HashSet<>();
+
+        neighbourDistances.put(myLocation, 0);
+        totalDistances.put(myLocation, distance(myLocation, targetGold));
+        notVisited.add(myLocation);
+
+        while (!notVisited.isEmpty()) {
+            Location current = getClosestNeighbour(notVisited, totalDistances);
+
+            if (current.equals(targetGold)) {
+                return reconstructPath(currentToPrevious, current);
+            }
+
+            notVisited.remove(current);
+            visited.add(current);
+
+            for (Direction direction : Direction.values()) {
+                Location neighbour = getNeighborLocation(current, direction);
+
+                if (!isSafe(cave, neighbour, playerLocations) || visited.contains(neighbour)) {
+                    continue;
+                }
+
+                int neighbourDistance = neighbourDistances.get(current) + 1;
+
+                if (!notVisited.contains(neighbour) || neighbourDistance < neighbourDistances.getOrDefault(neighbour, Integer.MAX_VALUE)) {
+                    notVisited.add(neighbour);
+                    neighbourDistances.put(neighbour, neighbourDistance);
+                    totalDistances.put(neighbour, neighbourDistance + distance(neighbour, targetGold));
+                    currentToPrevious.put(neighbour, current);
+                }
+            }
+        }
+
+        return Collections.emptyList();
+    }
+
+    private static int distance(Location start, Location end) {
+        return Math.abs(start.row() - end.row()) + Math.abs(start.column() - end.column());
+    }
+
+    private static Location getClosestNeighbour(Set<Location> notVisited, Map<Location, Integer> totalDistances) {
+        return notVisited.stream()
+                .min(Comparator.comparingInt(location -> totalDistances.getOrDefault(location, Integer.MAX_VALUE)))
+                .orElse(null);
+    }
+
+    private static List<Direction> reconstructPath(Map<Location, Location> currentToPrevious, Location current) {
+        List<Direction> path = new ArrayList<>();
+
+        while (currentToPrevious.containsKey(current)) {
+            Location previous = currentToPrevious.get(current);
+            path.add(getDirection(previous, current)); // consecutive step
+            current = previous;
+        }
+
+        Collections.reverse(path);
+        return path;
+    }
+
+    private static Direction getDirection(Location from, Location to) {
+        if (to.row() < from.row()) {
+            return Direction.Up;
+        } else if (to.row() > from.row()) {
+            return Direction.Down;
+        } else if (to.column() < from.column()) {
+            return Direction.Left;
+        } else {
+            return Direction.Right;
+        }
+    }
+
+    private static Location getNeighborLocation(Location location, Direction direction) {
+        return switch (direction) {
+            case Up -> new Location(location.row() - 1, location.column());
+            case Down -> new Location(location.row() + 1, location.column());
+            case Left -> new Location(location.row(), location.column() - 1);
+            case Right -> new Location(location.row(), location.column() + 1);
+        };
+    }
+
+    private static boolean isSafe(Cave cave, Location location, Collection<Response.StateLocations.PlayerLocation> playerLocations) {
+
+        boolean isRock = cave.rock(location.row(), location.column());
+
+        Map<Player.Dragon, Location> dragonLocations = playerLocations.stream()
+                .filter(entry -> entry.entity() instanceof Player.Dragon)
+                .collect(Collectors.toMap(entry -> (Player.Dragon) entry.entity(), Response.StateLocations.PlayerLocation::location));
+
+        boolean isDragon = dragonLocations.values().stream()
+                .anyMatch(dragonLocation -> dragonLocation.equals(location));
+
+        return !isRock && !isDragon;
     }
 
     private static void movePlayerPipeline(BufferedWriter writer, Direction direction) throws IOException {
